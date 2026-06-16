@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: smart-wake-alarm
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SCHOOL_USERNAME
+        sync: false
+      - key: SCHOOL_PASSWORD
+        sync: false
+      - key: API_TOKEN
+        sync: false
+      - key: VORLAUFZEIT
+        value: "30"
