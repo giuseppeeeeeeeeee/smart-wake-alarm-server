@@ -93,12 +93,20 @@ STUNDENPLAN = {
     },
 }
 
-# ===== WECKER-ZUORDNUNG =====
-# Welcher Wecker für welche Weckzeit?
+# ===== FESTE WECKZEITEN =====
+# Statt dynamischer Berechnung: feste Weckzeiten pro Szenario
+FESTE_WECKZEITEN = {
+    "normal": "06:30",   # Normaler Schultag
+    "free1": "07:20",    # 1. Stunde frei
+    "free12": "08:00",   # 1.+2. Stunde frei
+    "free123": "08:00",  # 1.+2.+3. Stunde frei (gleich wie free12)
+}
+
+# Wecker-Namen auf dem iPhone
 WECKER_ZUORDNUNG = {
-    "06:30": "Smart Wecker Regulärer Unterricht",
-    "07:20": "Smart Wecker 1ste Stunde Frei",
-    "08:05": "Smart Wecker 2 Stunden frei",
+    "06:30": "Schule 0630",
+    "07:20": "Schule 0720",
+    "08:00": "Schule 0800",
 }
 
 # ===== SCHULFERIEN RLP 2025/2026 =====
@@ -417,9 +425,9 @@ def berechne_weckzeit(tag_name, datum_str):
     else:
         szenario = "normal"
     
-    # 8. Berechne Weckzeit
+    # 8. Berechne Weckzeit (feste Zeiten!)
     schulbeginn = STUNDEN_BEGINN.get(erste_stunde, "07:55")
-    weckzeit = subtrahiere_minuten(schulbeginn, VORLAUFZEIT)
+    weckzeit = FESTE_WECKZEITEN.get(szenario, "06:30")
     
     # 9. Labels
     LABELS = {
