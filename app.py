@@ -167,7 +167,7 @@ def parse_termine_aus_html(html: str) -> list[dict]:
       Mo 29.6.
     -> Tabellenzeilen mit Datum + optionalem Text. Leere Zeilen = kein Termin.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")  # statt "lxml"
     termine = []
 
     zeilen = soup.find_all("tr")
