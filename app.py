@@ -55,7 +55,7 @@ def get_session():
  
         print(f"[LOGIN] Felder: user={user_field}, pass={pass_field}")
  
-        resp = s.post(LOGIN_URL, data={user_field: USER, pass_field: PASS}, timeout=15)
+        resp = s.post(LOGIN_URL, data={user_field: USER, pass_field: PASS, "submit": "login"}, timeout=15)
         print(f"[LOGIN] Status: {resp.status_code}, URL nach Login: {resp.url}")
  
         # Prüfen ob Login erfolgreich (kein Login-Formular mehr da)
@@ -368,3 +368,4 @@ def home():
  
 if __name__ == "__main__":
     app.run()
+ 
