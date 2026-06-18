@@ -21,8 +21,7 @@ TOKEN = os.getenv("API_TOKEN", "1_smartwake2026")
 USER = os.getenv("SCHULPORTAL_USER")
 PASS = os.getenv("SCHULPORTAL_PASS")
  
-# MSS-Stufe (anpassen wenn du in 12 bist)
-MEINE_KLASSE = "11"
+MEINE_KLASSE = "12"
  
 # =========================
 # SESSION (cached 30 min)
@@ -38,7 +37,33 @@ def get_session():
         return _session
     s = requests.Session()
     try:
-        s.post(LOGIN_URL, data={"username": USER, "password": PASS}, timeout=15)
+        # Erst GET um Cookies/CSRF zu holen
+        r = s.get(LOGIN_URL, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+ 
+        # Login-Feldnamen aus HTML extrahieren
+        form = soup.find("form")
+        user_field = "username"
+        pass_field = "password"
+        if form:
+            inputs = form.find_all("input", {"type": ["text", "email"]})
+            if inputs:
+                user_field = inputs[0].get("name", "username")
+            inputs_pw = form.find_all("input", {"type": "password"})
+            if inputs_pw:
+                pass_field = inputs_pw[0].get("name", "password")
+ 
+        print(f"[LOGIN] Felder: user={user_field}, pass={pass_field}")
+ 
+        resp = s.post(LOGIN_URL, data={user_field: USER, pass_field: PASS}, timeout=15)
+        print(f"[LOGIN] Status: {resp.status_code}, URL nach Login: {resp.url}")
+ 
+        # Prüfen ob Login erfolgreich (kein Login-Formular mehr da)
+        if "logout" in resp.text.lower() or "abmelden" in resp.text.lower():
+            print("[LOGIN] Erfolgreich eingeloggt")
+        else:
+            print("[LOGIN] WARNUNG: Login möglicherweise fehlgeschlagen")
+ 
     except Exception as e:
         print(f"[WARN] Login fehlgeschlagen: {e}")
     _session = s
@@ -47,7 +72,6 @@ def get_session():
  
 # =========================
 # STUNDENPLAN (0=Mo..4=Fr)
-# Stunde -> Kurs | None (fester Frei-Slot)
 # =========================
  
 STUNDENPLAN = {
@@ -56,16 +80,6 @@ STUNDENPLAN = {
     2: {1: "mu1",  2: "mu1",  3: "de3",  4: "de3",  5: "ma5", 6: "ma5"},
     3: {1: None,   2: "EN4",  3: "rk1",  4: "rk1",  5: "mu1", 6: "mu1", 8: "in1", 9: "in1"},
     4: {1: "BI4",  2: "BI4",  3: "skg1", 4: "skg1", 5: "EK1", 6: "EK1"},
-}
- 
-# =========================
-# STUNDEN-STARTZEITEN
-# =========================
- 
-START = {
-    1: "07:55", 2: "08:45", 3: "09:45", 4: "10:30",
-    5: "11:30", 6: "12:20", 7: "13:05", 8: "13:40",
-    9: "14:25", 10: "15:15", 11: "16:00"
 }
  
 WECKZEITEN = {
@@ -121,17 +135,14 @@ def ist_feiertag(tag):
     if (tag.month, tag.day) in FESTE_FEIERTAGE:
         return FESTE_FEIERTAGE[(tag.month, tag.day)]
     bew = bewegliche_feiertage(tag.year)
-    if tag in bew:
-        return bew[tag]
-    return None
+    return bew.get(tag, None)
  
 # =========================
-# FERIEN (Kalender-Scraping)
+# FERIEN
 # =========================
  
 FERIEN_KEYWORDS = [
-    "ferien", "ferienschluss", "ferientag", "ferienstart",
-    "schulfrei", "bewegliche ferientage", "kein unterricht"
+    "ferien", "schulfrei", "bewegliche ferientage", "kein unterricht"
 ]
  
 def ist_schulfrei(zieltag):
@@ -139,108 +150,101 @@ def ist_schulfrei(zieltag):
         s = get_session()
         html = s.get(KALENDER_URL, timeout=15).text
         soup = BeautifulSoup(html, "html.parser")
- 
         entries_div = soup.find("div", {"id": "entries"})
         if not entries_div:
+            print("[FERIEN] entries-div nicht gefunden")
             return False
  
         for tr in entries_div.find_all("tr"):
             anchor = tr.find("a", {"name": re.compile(r"^\d{4}-\d{1,2}-\d{1,2}$")})
             if not anchor:
                 continue
- 
             name = anchor.get("name", "")
             parts = name.split("-")
             if len(parts) != 3:
                 continue
- 
             try:
                 eintrag_datum = dt.date(int(parts[0]), int(parts[1]), int(parts[2]))
             except ValueError:
                 continue
  
             text = tr.get_text(" ", strip=True).lower()
- 
-            # Ferien-Keyword?
             if not any(kw in text for kw in FERIEN_KEYWORDS):
                 continue
  
-            # Einzel-Tag passt?
             if eintrag_datum == zieltag:
+                print(f"[FERIEN] Treffer Einzeltag: {text[:80]}")
                 return True
  
-            # Mehrtägiger Zeitraum? ("bis DD.MM.YYYY" oder "bis DD.MM.")
             bis_match = re.search(r"bis\s+(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
             if bis_match:
-                bis_tag = int(bis_match.group(1))
-                bis_mon = int(bis_match.group(2))
-                bis_jahr_str = bis_match.group(3)
-                bis_jahr = int(bis_jahr_str) if bis_jahr_str else eintrag_datum.year
+                bis_t = int(bis_match.group(1))
+                bis_m = int(bis_match.group(2))
+                bis_j = int(bis_match.group(3)) if bis_match.group(3) else eintrag_datum.year
                 try:
-                    bis_datum = dt.date(bis_jahr, bis_mon, bis_tag)
+                    bis_datum = dt.date(bis_j, bis_m, bis_t)
                     if eintrag_datum <= zieltag <= bis_datum:
+                        print(f"[FERIEN] Treffer Zeitraum {eintrag_datum}–{bis_datum}")
                         return True
                 except ValueError:
                     pass
  
         return False
- 
     except Exception as e:
         print(f"[WARN] Kalender-Fetch fehlgeschlagen: {e}")
         return False
  
 # =========================
-# VERTRETUNGSPLAN PARSER
+# VERTRETUNGSPLAN
 # =========================
  
+FREI_ARTEN = {"Selbst", "Entfall", "Freisetzung", "selbständiges Arbeiten"}
+ 
 def get_ausfaelle(datum):
-    """
-    Gibt Set von Stunden zurück die für MEINE_KLASSE ausfallen.
-    Frei-Arten: Selbst, Entfall, Freisetzung
-    """
     try:
         s = get_session()
         html = s.get(VERTRETUNG_URL, timeout=15).text
         soup = BeautifulSoup(html, "html.parser")
  
+        # Debug: welche vplan-ids gibt es überhaupt?
+        alle_divs = soup.find_all("div", {"vplan-id": True})
+        ids = [d.get("vplan-id") for d in alle_divs]
+        print(f"[VPLAN] Verfügbare IDs: {ids}")
+ 
         vplan_id = datum.strftime("%Y-%m-%d")
         tag_div = soup.find("div", {"vplan-id": vplan_id})
  
         if not tag_div:
-            print(f"[INFO] Kein Vplan-Div für {vplan_id}")
+            print(f"[VPLAN] Kein Div für {vplan_id} — nicht eingeloggt oder kein Plan")
             return set()
  
-        # "Keine relevanten Einträge" → leer
-        kein_td = tag_div.find("td", {"colspan": "7"})
+        # "Keine relevanten Einträge"
+        kein_td = tag_div.find("td", string=re.compile("Keine relevanten", re.I))
         if kein_td:
+            print(f"[VPLAN] Keine relevanten Einträge für {vplan_id}")
             return set()
- 
-        FREI_ARTEN = {"Selbst", "Entfall", "Freisetzung", "selbständiges Arbeiten"}
  
         ausfaelle = set()
- 
         for tr in tag_div.find_all("tr"):
             tds = tr.find_all("td")
             if len(tds) < 6:
                 continue
- 
             klasse = tds[0].text.strip()
             stunde_raw = tds[1].text.strip()
             art = tds[5].text.strip()
  
-            # Nur meine Klasse
+            print(f"[VPLAN] Row: klasse={klasse!r} stunde={stunde_raw!r} art={art!r}")
+ 
             if klasse != MEINE_KLASSE:
                 continue
- 
-            # Nur Frei-Arten
             if art not in FREI_ARTEN:
                 continue
  
-            # Stunden parsen: "1", "3 - 4", "8 - 9"
             nums = re.findall(r"\d+", stunde_raw)
             for n in nums:
                 ausfaelle.add(int(n))
  
+        print(f"[VPLAN] Ausfälle für {vplan_id}: {ausfaelle}")
         return ausfaelle
  
     except Exception as e:
@@ -248,38 +252,70 @@ def get_ausfaelle(datum):
         return set()
  
 # =========================
-# FREE COUNT + SZENARIO
+# FREE COUNT
 # =========================
  
 def get_free_count(wochentag, ausfaelle):
-    """
-    Zählt konsekutive freie Stunden vom Anfang des Tages.
-    Stoppt bei erster echter Stunde (Kurs != None, nicht in ausfaelle).
-    """
     plan = STUNDENPLAN.get(wochentag, {})
- 
     if not plan:
         return 0
- 
-    alle_stunden = sorted(plan.keys())
     free_count = 0
- 
-    for stunde in alle_stunden:
+    for stunde in sorted(plan.keys()):
         kurs = plan[stunde]
- 
-        ist_fester_frei = (kurs is None)
-        ist_ausfall = (kurs is not None) and (stunde in ausfaelle)
- 
-        if ist_fester_frei or ist_ausfall:
+        if (kurs is None) or (kurs is not None and stunde in ausfaelle):
             free_count += 1
         else:
-            break  # erste echte Stunde → Stopp
- 
+            break
     return free_count
  
 def szenario_str(free_count):
-    mapping = {0: "normal", 1: "free1", 2: "free12", 3: "free123", 4: "free1234"}
-    return mapping.get(free_count, "free1234")
+    return {0: "normal", 1: "free1", 2: "free12", 3: "free123", 4: "free1234"}.get(free_count, "free1234")
+ 
+# =========================
+# DEBUG ENDPOINT
+# =========================
+ 
+@app.route("/debug")
+def debug():
+    if request.args.get("token") != TOKEN:
+        return jsonify({"error": "unauthorized"}), 403
+ 
+    datum_str = request.args.get("datum", dt.date.today().strftime("%Y-%m-%d"))
+    try:
+        datum = dt.date.fromisoformat(datum_str)
+    except ValueError:
+        datum = dt.date.today()
+ 
+    s = get_session()
+ 
+    # Vertretungsplan roh
+    vplan_html = s.get(VERTRETUNG_URL, timeout=15).text
+    soup = BeautifulSoup(vplan_html, "html.parser")
+    alle_divs = soup.find_all("div", {"vplan-id": True})
+    ids = [d.get("vplan-id") for d in alle_divs]
+ 
+    tag_div = soup.find("div", {"vplan-id": datum.strftime("%Y-%m-%d")})
+    rows = []
+    if tag_div:
+        for tr in tag_div.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) >= 6:
+                rows.append({
+                    "klasse": tds[0].text.strip(),
+                    "stunde": tds[1].text.strip(),
+                    "art": tds[5].text.strip(),
+                })
+ 
+    # Login-Check
+    logged_in = "abmelden" in vplan_html.lower() or "logout" in vplan_html.lower()
+ 
+    return jsonify({
+        "datum": str(datum),
+        "logged_in": logged_in,
+        "verfuegbare_vplan_ids": ids,
+        "rows_fuer_datum": rows,
+        "meine_klasse": MEINE_KLASSE,
+    })
  
 # =========================
 # HAUPTENDPOINT
@@ -301,24 +337,18 @@ def api_weckzeit():
         except ValueError:
             return jsonify({"error": "ungültiges Datum"}), 400
  
-    # 1. Wochenende
     if datum.weekday() >= 5:
         return jsonify({"wecker": False, "szenario": "wochenende", "datum": str(datum)})
  
-    # 2. Feiertag
     feiertag = ist_feiertag(datum)
     if feiertag:
         return jsonify({"wecker": False, "szenario": "feiertag", "name": feiertag, "datum": str(datum)})
  
-    # 3. Schulferien
     if ist_schulfrei(datum):
         return jsonify({"wecker": False, "szenario": "ferien", "datum": str(datum)})
  
-    # 4. Vertretungsplan-Ausfälle
     ausfaelle = get_ausfaelle(datum)
- 
-    # 5. Freistunden berechnen
-    wochentag = datum.weekday()  # 0=Mo..4=Fr
+    wochentag = datum.weekday()
     free_count = get_free_count(wochentag, ausfaelle)
     szen = szenario_str(free_count)
     weckzeit = WECKZEITEN[szen]
@@ -331,10 +361,6 @@ def api_weckzeit():
         "free_count": free_count,
         "datum": str(datum)
     })
- 
-# =========================
-# HEALTH CHECK
-# =========================
  
 @app.route("/")
 def home():
